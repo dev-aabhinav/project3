@@ -65,6 +65,7 @@ include(GoogleTest)
 
 add_executable(unit_tests
     tests/disk_manager_test.cpp
+    tests/lru_cache_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE index_engine GTest::gtest_main)

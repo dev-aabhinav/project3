@@ -34,6 +34,7 @@ endif()
 
 add_library(index_engine
     src/disk_manager.cpp
+    src/lru_replacer.cpp
 )
 
 target_include_directories(index_engine PUBLIC include)
@@ -66,6 +67,7 @@ include(GoogleTest)
 add_executable(unit_tests
     tests/disk_manager_test.cpp
     tests/lru_cache_test.cpp
+    tests/lru_replacer_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE index_engine GTest::gtest_main)

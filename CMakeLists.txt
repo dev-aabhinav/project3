@@ -36,6 +36,7 @@ add_library(index_engine
     src/disk_manager.cpp
     src/lru_replacer.cpp
     src/buffer_pool_manager.cpp
+    src/b_plus_tree.cpp
 )
 
 target_include_directories(index_engine PUBLIC include)
@@ -70,6 +71,8 @@ add_executable(unit_tests
     tests/lru_cache_test.cpp
     tests/lru_replacer_test.cpp
     tests/buffer_pool_manager_test.cpp
+    tests/page_guard_test.cpp
+    tests/b_plus_tree_search_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE index_engine GTest::gtest_main)

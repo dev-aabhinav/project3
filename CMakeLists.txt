@@ -73,8 +73,17 @@ add_executable(unit_tests
     tests/buffer_pool_manager_test.cpp
     tests/page_guard_test.cpp
     tests/b_plus_tree_search_test.cpp
+    tests/b_plus_tree_insert_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE index_engine GTest::gtest_main)
 
 gtest_discover_tests(unit_tests)
+
+
+# ---------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------
+
+add_executable(tree_shape tools/tree_shape.cpp)
+target_link_libraries(tree_shape PRIVATE index_engine)

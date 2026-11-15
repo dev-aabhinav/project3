@@ -106,9 +106,12 @@ struct InternalNode {
 };
 
 
-// Header page (one per tree): remembers where the root is.
+// Header page (one per tree): remembers where the root is and the node
+// size limits the tree was created with (so a reopened tree splits the same way).
 struct TreeHeaderPage {
     page_id_t root_page_id;
+    std::int32_t leaf_max_size;      // split a leaf when it would exceed this
+    std::int32_t internal_max_size;  // split an internal node beyond this many children
 };
 
 

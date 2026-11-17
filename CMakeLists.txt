@@ -74,6 +74,7 @@ add_executable(unit_tests
     tests/page_guard_test.cpp
     tests/b_plus_tree_search_test.cpp
     tests/b_plus_tree_insert_test.cpp
+    tests/b_plus_tree_delete_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE index_engine GTest::gtest_main)

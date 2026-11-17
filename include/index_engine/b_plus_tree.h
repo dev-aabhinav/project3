@@ -7,6 +7,7 @@
 #include "index_engine/b_plus_tree_page.h"
 #include "index_engine/buffer_pool_manager.h"
 #include "index_engine/config.h"
+#include "index_engine/page_guard.h"
 
 namespace index_engine {
 
@@ -17,6 +18,34 @@ struct TreeStats {
     std::int64_t leaf_pages = 0;
     std::int64_t internal_pages = 0;
     double avg_leaf_fill = 0.0;   // num_keys / (leaf_pages * leaf_max_size)
+};
+
+
+// Forward iterator over the leaf chain, in key order.
+// Holds exactly one pin: the leaf it is currently on.
+//
+//   for (auto it = tree.Begin(lo); it.Valid() && it.Key() < hi; it.Next()) { ... }
+class BPlusTreeIterator {
+public:
+    BPlusTreeIterator() = default;
+    BPlusTreeIterator(BufferPoolManager* bpm, PageGuard leaf, int index);
+
+    // False once we have walked past the last key of the last leaf.
+    bool Valid() const { return guard_.IsValid(); }
+
+    KeyType Key() const { return guard_.As<LeafNode>()->keys[index_]; }
+    ValueType Value() const { return guard_.As<LeafNode>()->values[index_]; }
+
+    void Next();
+
+private:
+    // If index_ is past the end of this leaf, hop along next_leaf until a
+    // key is found or the chain ends.
+    void SkipToValid();
+
+    BufferPoolManager* bpm_ = nullptr;
+    PageGuard guard_;
+    int index_ = 0;
 };
 
 
@@ -46,6 +75,18 @@ public:
     // already exists. Splits full nodes on the way back up.
     bool Insert(KeyType key, ValueType value);
 
+    // Removes key. Returns false if it was not there. Underfull nodes borrow
+    // from a sibling or merge with it; the tree shrinks when the root is
+    // left with a single child.
+    bool Remove(KeyType key);
+
+
+    // Iterator at the first key >= lo (invalid if there is none).
+    BPlusTreeIterator Begin(KeyType lo) const;
+
+    // Iterator at the smallest key.
+    BPlusTreeIterator Begin() const;
+
 
     bool IsEmpty() const;
 
@@ -63,7 +104,27 @@ public:
     int InternalMaxSize() const { return internal_max_size_; }
 
 private:
+    struct PathEntry {
+        page_id_t page_id;   // an internal node on the way down
+        int child_index;     // which child we followed from it
+    };
+
     void SetRootPageId(page_id_t root);
+
+    // Drops a page that is no longer part of the tree.
+    void FreePage(page_id_t page_id);
+
+    int LeafMinSize() const { return (leaf_max_size_ + 1) / 2; }          // ceil(max / 2)
+    int InternalMinSize() const { return (internal_max_size_ + 1) / 2; }  // ceil(max / 2)
+
+    // Fix the underfull child at `index` of `parent` by borrowing from a
+    // sibling (returns false) or merging with one (returns true: the parent
+    // lost a child and may now be underfull itself).
+    bool FixLeafUnderflow(PageGuard& parent, int index);
+    bool FixInternalUnderflow(PageGuard& parent, int index);
+
+    // Removes children[index] and keys[index] (index >= 1) from a node.
+    static void RemoveFromInternal(InternalNode* node, int index);
 
     // After `left` split into left + right, tell the parent (the last
     // entry of `path`) that keys >= `separator` now live in `right`.

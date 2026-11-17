@@ -3,6 +3,8 @@
 #include "index_engine/page_guard.h"
 
 #include <algorithm>
+#include <limits>
+#include <utility>
 #include <stdexcept>
 #include <vector>
 
@@ -180,6 +182,402 @@ bool BPlusTree::Insert(KeyType key, ValueType value) {
 
     InsertIntoParent(path, left_pid, separator, right_pid);
     return true;
+}
+
+
+// ---------------------------------------------------------------
+// Remove
+// ---------------------------------------------------------------
+
+void BPlusTree::FreePage(page_id_t page_id) {
+    if (!bpm_->DeletePage(page_id)) {
+        throw std::logic_error("B+ tree tried to free a pinned page");
+    }
+}
+
+
+bool BPlusTree::Remove(KeyType key) {
+    page_id_t root = RootPageId();
+
+    if (root == kInvalidPageId) {
+        return false;
+    }
+
+    // 1) Walk down, remembering each internal node AND which child we took
+    //    (the child index is how we find siblings later).
+    std::vector<PathEntry> path;
+    PageGuard guard = FetchPageGuard(bpm_, root);
+
+    while (GetNodeType(guard.Data()) == NodeType::kInternal) {
+        const InternalNode* node = guard.As<InternalNode>();
+        int idx = node->ChildIndex(key);
+
+        path.push_back({guard.PageId(), idx});
+        guard = FetchPageGuard(bpm_, node->children[idx]);
+    }
+
+    // 2) Delete from the leaf: shift the tail left by one.
+    LeafNode* leaf = guard.As<LeafNode>();
+    int n = leaf->Size();
+    int pos = leaf->LowerBound(key);
+
+    if (pos >= n || leaf->keys[pos] != key) {
+        return false;  // not in the tree
+    }
+
+    std::copy(leaf->keys + pos + 1, leaf->keys + n, leaf->keys + pos);
+    std::copy(leaf->values + pos + 1, leaf->values + n, leaf->values + pos);
+    --leaf->header.size;
+    guard.MarkDirty();
+
+    int leaf_size = leaf->Size();
+    page_id_t leaf_pid = guard.PageId();
+    guard.Release();
+
+    // 3) Leaf is the root: it may shrink to anything; at 0 the tree is empty.
+    if (path.empty()) {
+        if (leaf_size == 0) {
+            SetRootPageId(kInvalidPageId);
+            FreePage(leaf_pid);
+        }
+        return true;
+    }
+
+    if (leaf_size >= LeafMinSize()) {
+        return true;  // still at least half full: done
+    }
+
+    // 4) Leaf underflow: borrow or merge using the parent.
+    PathEntry entry = path.back();
+    path.pop_back();
+
+    {
+        PageGuard parent = FetchPageGuard(bpm_, entry.page_id);
+
+        if (!FixLeafUnderflow(parent, entry.child_index)) {
+            return true;  // borrowed: nothing changes above the parent
+        }
+    }
+
+    // 5) A merge removed one child from the parent. Walk up while nodes are
+    //    underfull, fixing each one with ITS parent.
+    page_id_t node_pid = entry.page_id;
+
+    while (true) {
+        PageGuard node_guard = FetchPageGuard(bpm_, node_pid);
+        int size = node_guard.As<InternalNode>()->Size();
+
+        if (path.empty()) {
+            // node is the root. A root with a single child is useless:
+            // that child becomes the root and the tree gets one level shorter.
+            if (size == 1) {
+                page_id_t only_child = node_guard.As<InternalNode>()->children[0];
+                node_guard.Release();
+
+                SetRootPageId(only_child);
+                FreePage(node_pid);
+            }
+            return true;
+        }
+
+        if (size >= InternalMinSize()) {
+            return true;
+        }
+
+        node_guard.Release();
+
+        PathEntry up = path.back();
+        path.pop_back();
+
+        PageGuard parent = FetchPageGuard(bpm_, up.page_id);
+
+        if (!FixInternalUnderflow(parent, up.child_index)) {
+            return true;
+        }
+
+        node_pid = up.page_id;  // parent lost a child: check it next
+    }
+}
+
+
+void BPlusTree::RemoveFromInternal(InternalNode* node, int index) {
+    int n = node->Size();
+
+    std::copy(node->children + index + 1, node->children + n, node->children + index);
+    std::copy(node->keys + index + 1, node->keys + n, node->keys + index);
+    --node->header.size;
+}
+
+
+bool BPlusTree::FixLeafUnderflow(PageGuard& parent, int index) {
+    InternalNode* p = parent.As<InternalNode>();
+
+    page_id_t leaf_pid = p->children[index];
+    PageGuard leaf_guard = FetchPageGuard(bpm_, leaf_pid);
+    LeafNode* leaf = leaf_guard.As<LeafNode>();
+
+    // --- Borrow from the LEFT sibling: take its last entry. ---
+    if (index > 0) {
+        PageGuard left_guard = FetchPageGuard(bpm_, p->children[index - 1]);
+        LeafNode* left = left_guard.As<LeafNode>();
+
+        if (left->Size() > LeafMinSize()) {
+            int n = leaf->Size();
+            int ln = left->Size();
+
+            std::copy_backward(leaf->keys, leaf->keys + n, leaf->keys + n + 1);
+            std::copy_backward(leaf->values, leaf->values + n, leaf->values + n + 1);
+
+            leaf->keys[0] = left->keys[ln - 1];
+            leaf->values[0] = left->values[ln - 1];
+            ++leaf->header.size;
+            --left->header.size;
+
+            // Separator must equal the first key of the right-hand leaf.
+            p->keys[index] = leaf->keys[0];
+
+            leaf_guard.MarkDirty();
+            left_guard.MarkDirty();
+            parent.MarkDirty();
+            return false;
+        }
+    }
+
+    // --- Borrow from the RIGHT sibling: take its first entry. ---
+    if (index + 1 < p->Size()) {
+        PageGuard right_guard = FetchPageGuard(bpm_, p->children[index + 1]);
+        LeafNode* right = right_guard.As<LeafNode>();
+
+        if (right->Size() > LeafMinSize()) {
+            int n = leaf->Size();
+            int rn = right->Size();
+
+            leaf->keys[n] = right->keys[0];
+            leaf->values[n] = right->values[0];
+            ++leaf->header.size;
+
+            std::copy(right->keys + 1, right->keys + rn, right->keys);
+            std::copy(right->values + 1, right->values + rn, right->values);
+            --right->header.size;
+
+            // The right leaf's first key changed: update its separator.
+            p->keys[index + 1] = right->keys[0];
+
+            leaf_guard.MarkDirty();
+            right_guard.MarkDirty();
+            parent.MarkDirty();
+            return false;
+        }
+    }
+
+    // --- Nobody can lend: MERGE. Always pour the right node into the left
+    //     one, so the left page survives and the right page is freed. ---
+    page_id_t left_pid;
+    page_id_t right_pid;
+    int remove_index;
+
+    if (index > 0) {
+        left_pid = p->children[index - 1];   // underfull leaf is the right one
+        right_pid = leaf_pid;
+        remove_index = index;
+    } else {
+        left_pid = leaf_pid;                 // underfull leaf is the left one
+        right_pid = p->children[index + 1];
+        remove_index = index + 1;
+    }
+
+    leaf_guard.Release();
+
+    {
+        PageGuard left_guard = FetchPageGuard(bpm_, left_pid);
+        PageGuard right_guard = FetchPageGuard(bpm_, right_pid);
+
+        LeafNode* left = left_guard.As<LeafNode>();
+        LeafNode* right = right_guard.As<LeafNode>();
+
+        int ln = left->Size();
+        int rn = right->Size();
+
+        std::copy(right->keys, right->keys + rn, left->keys + ln);
+        std::copy(right->values, right->values + rn, left->values + ln);
+        left->header.size = ln + rn;
+
+        // Leaf chain skips the page that is about to disappear.
+        left->header.next_leaf = right->header.next_leaf;
+
+        left_guard.MarkDirty();
+    }
+
+    RemoveFromInternal(p, remove_index);
+    parent.MarkDirty();
+
+    FreePage(right_pid);
+    return true;
+}
+
+
+bool BPlusTree::FixInternalUnderflow(PageGuard& parent, int index) {
+    InternalNode* p = parent.As<InternalNode>();
+
+    page_id_t node_pid = p->children[index];
+    PageGuard node_guard = FetchPageGuard(bpm_, node_pid);
+    InternalNode* node = node_guard.As<InternalNode>();
+
+    // --- Borrow from the LEFT sibling = rotate right through the parent:
+    //     parent separator comes DOWN as our first key, the sibling's last
+    //     key goes UP to replace it, and its last child moves to us. ---
+    if (index > 0) {
+        PageGuard left_guard = FetchPageGuard(bpm_, p->children[index - 1]);
+        InternalNode* left = left_guard.As<InternalNode>();
+
+        if (left->Size() > InternalMinSize()) {
+            int n = node->Size();
+            int ln = left->Size();
+
+            std::copy_backward(node->children, node->children + n, node->children + n + 1);
+            std::copy_backward(node->keys + 1, node->keys + n, node->keys + n + 1);
+
+            node->children[0] = left->children[ln - 1];
+            node->keys[1] = p->keys[index];          // separator comes down
+            p->keys[index] = left->keys[ln - 1];     // sibling's last key goes up
+
+            --left->header.size;
+            ++node->header.size;
+
+            node_guard.MarkDirty();
+            left_guard.MarkDirty();
+            parent.MarkDirty();
+            return false;
+        }
+    }
+
+    // --- Borrow from the RIGHT sibling = rotate left through the parent. ---
+    if (index + 1 < p->Size()) {
+        PageGuard right_guard = FetchPageGuard(bpm_, p->children[index + 1]);
+        InternalNode* right = right_guard.As<InternalNode>();
+
+        if (right->Size() > InternalMinSize()) {
+            int n = node->Size();
+            int rn = right->Size();
+
+            node->children[n] = right->children[0];
+            node->keys[n] = p->keys[index + 1];      // separator comes down
+            p->keys[index + 1] = right->keys[1];     // sibling's first key goes up
+
+            std::copy(right->children + 1, right->children + rn, right->children);
+            std::copy(right->keys + 2, right->keys + rn, right->keys + 1);
+
+            --right->header.size;
+            ++node->header.size;
+
+            node_guard.MarkDirty();
+            right_guard.MarkDirty();
+            parent.MarkDirty();
+            return false;
+        }
+    }
+
+    // --- MERGE = PULL DOWN: the parent's separator comes down between the
+    //     two nodes (the reverse of push-up), then all right children follow. ---
+    page_id_t left_pid;
+    page_id_t right_pid;
+    int remove_index;
+
+    if (index > 0) {
+        left_pid = p->children[index - 1];
+        right_pid = node_pid;
+        remove_index = index;
+    } else {
+        left_pid = node_pid;
+        right_pid = p->children[index + 1];
+        remove_index = index + 1;
+    }
+
+    node_guard.Release();
+
+    {
+        PageGuard left_guard = FetchPageGuard(bpm_, left_pid);
+        PageGuard right_guard = FetchPageGuard(bpm_, right_pid);
+
+        InternalNode* left = left_guard.As<InternalNode>();
+        InternalNode* right = right_guard.As<InternalNode>();
+
+        int ln = left->Size();
+        int rn = right->Size();
+
+        left->keys[ln] = p->keys[remove_index];      // pulled down
+        left->children[ln] = right->children[0];
+
+        for (int j = 1; j < rn; ++j) {
+            left->keys[ln + j] = right->keys[j];
+            left->children[ln + j] = right->children[j];
+        }
+
+        left->header.size = ln + rn;
+        left_guard.MarkDirty();
+    }
+
+    RemoveFromInternal(p, remove_index);
+    parent.MarkDirty();
+
+    FreePage(right_pid);
+    return true;
+}
+
+
+// ---------------------------------------------------------------
+// Range scan
+// ---------------------------------------------------------------
+
+BPlusTreeIterator::BPlusTreeIterator(BufferPoolManager* bpm, PageGuard leaf, int index)
+    : bpm_(bpm), guard_(std::move(leaf)), index_(index) {
+    SkipToValid();
+}
+
+
+void BPlusTreeIterator::Next() {
+    ++index_;
+    SkipToValid();
+}
+
+
+void BPlusTreeIterator::SkipToValid() {
+    while (guard_.IsValid() && index_ >= guard_.As<LeafNode>()->Size()) {
+        page_id_t next = guard_.As<LeafNode>()->header.next_leaf;
+
+        if (next == kInvalidPageId) {
+            guard_.Release();  // past the last key: iterator becomes invalid
+            return;
+        }
+
+        guard_ = FetchPageGuard(bpm_, next);  // pins next, unpins current
+        index_ = 0;
+    }
+}
+
+
+BPlusTreeIterator BPlusTree::Begin(KeyType lo) const {
+    page_id_t root = RootPageId();
+
+    if (root == kInvalidPageId) {
+        return BPlusTreeIterator();
+    }
+
+    PageGuard guard = FetchPageGuard(bpm_, root);
+
+    while (GetNodeType(guard.Data()) == NodeType::kInternal) {
+        guard = FetchPageGuard(bpm_, guard.As<InternalNode>()->ChildFor(lo));
+    }
+
+    // lo may be bigger than every key in this leaf; SkipToValid then moves
+    // on to the next leaf.
+    int index = guard.As<LeafNode>()->LowerBound(lo);
+    return BPlusTreeIterator(bpm_, std::move(guard), index);
+}
+
+
+BPlusTreeIterator BPlusTree::Begin() const {
+    return Begin(std::numeric_limits<KeyType>::min());
 }
 
 

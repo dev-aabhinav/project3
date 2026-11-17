@@ -37,6 +37,7 @@ add_library(index_engine
     src/lru_replacer.cpp
     src/buffer_pool_manager.cpp
     src/b_plus_tree.cpp
+    src/extendible_hash_table.cpp
 )
 
 target_include_directories(index_engine PUBLIC include)
@@ -75,6 +76,7 @@ add_executable(unit_tests
     tests/b_plus_tree_search_test.cpp
     tests/b_plus_tree_insert_test.cpp
     tests/b_plus_tree_delete_test.cpp
+    tests/extendible_hash_table_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE index_engine GTest::gtest_main)

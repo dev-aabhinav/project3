@@ -90,3 +90,11 @@ gtest_discover_tests(unit_tests)
 
 add_executable(tree_shape tools/tree_shape.cpp)
 target_link_libraries(tree_shape PRIVATE index_engine)
+
+
+# ---------------------------------------------------------------
+# Benchmarks (always run from the Release build directory)
+# ---------------------------------------------------------------
+
+add_executable(bench_range_scan bench/bench_range_scan.cpp)
+target_link_libraries(bench_range_scan PRIVATE index_engine)

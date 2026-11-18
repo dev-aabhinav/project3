@@ -36,6 +36,11 @@ public:
     // Forces written pages to stable storage (fsync).
     void Sync();
 
+    // Benchmarks only: fsync, then ask the kernel to drop this file's pages
+    // from the OS page cache, so the next reads really go to the device.
+    // Advisory: returns false if the kernel refused.
+    bool DropOsCache();
+
 
     page_id_t NumPages() const { return num_pages_; }
 

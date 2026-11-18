@@ -126,4 +126,13 @@ void DiskManager::Sync() {
     }
 }
 
+
+bool DiskManager::DropOsCache() {
+    // Dirty pages cannot be dropped, so write them to the device first.
+    Sync();
+
+    // offset 0, length 0 = the whole file.
+    return ::posix_fadvise(fd_, 0, 0, POSIX_FADV_DONTNEED) == 0;
+}
+
 }  // namespace index_engine

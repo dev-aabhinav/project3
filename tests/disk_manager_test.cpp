@@ -121,6 +121,22 @@ TEST_F(DiskManagerTest, DataSurvivesReopen) {
 }
 
 
+TEST_F(DiskManagerTest, DataStillReadableAfterDroppingOsCache) {
+    DiskManager dm(path_);
+    dm.AllocatePage();
+
+    char in[kPageSize];
+    char out[kPageSize];
+    FillPattern(in, 9);
+
+    dm.WritePage(0, in);
+    EXPECT_TRUE(dm.DropOsCache());
+
+    dm.ReadPage(0, out);   // must come back from the device intact
+    EXPECT_EQ(std::memcmp(in, out, kPageSize), 0);
+}
+
+
 TEST_F(DiskManagerTest, InvalidPageIdThrows) {
     DiskManager dm(path_);
     dm.AllocatePage();

@@ -6,11 +6,6 @@
 // Not timed: building the structures, generating the start keys.
 // Each cell = median of `runs` timed runs.
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -22,66 +17,13 @@
 #include <string>
 #include <vector>
 
+#include "bench_util.h"
 #include "index_engine/b_plus_tree.h"
 
 using namespace index_engine;
-using Clock = std::chrono::steady_clock;
+using namespace bench;
 
 namespace {
-
-double Median(std::vector<double> v) {
-    std::sort(v.begin(), v.end());
-    return v[v.size() / 2];
-}
-
-
-bool Verbose() {
-    static const bool verbose = std::getenv("BENCH_VERBOSE") != nullptr;
-    return verbose;
-}
-
-
-void PrintRuns(const char* label, std::int64_t range, const std::vector<double>& v) {
-    if (!Verbose()) {
-        return;
-    }
-    std::fprintf(stderr, "  [runs] range %-7lld %-18s", static_cast<long long>(range), label);
-    for (double t : v) {
-        std::fprintf(stderr, " %9.3f ms", t * 1e3);
-    }
-    std::fprintf(stderr, "\n");
-}
-
-
-double Spread(const std::vector<double>& v) {
-    auto [lo, hi] = std::minmax_element(v.begin(), v.end());
-    return (*hi - *lo) / Median(v);
-}
-
-
-// Fraction of the file's pages currently in the OS page cache (mincore).
-double ResidentFraction(const std::string& path) {
-    int fd = ::open(path.c_str(), O_RDONLY);
-    struct stat st {};
-    ::fstat(fd, &st);
-
-    std::size_t len = static_cast<std::size_t>(st.st_size);
-    void* addr = ::mmap(nullptr, len, PROT_READ, MAP_SHARED, fd, 0);
-
-    std::size_t os_page = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
-    std::vector<unsigned char> vec((len + os_page - 1) / os_page);
-    ::mincore(addr, len, vec.data());
-
-    std::size_t resident = 0;
-    for (unsigned char c : vec) {
-        resident += (c & 1);
-    }
-
-    ::munmap(addr, len);
-    ::close(fd);
-    return static_cast<double>(resident) / static_cast<double>(vec.size());
-}
-
 
 template <typename Map>
 std::uint64_t ScanMap(const Map& m, KeyType lo, std::int64_t count) {
@@ -118,17 +60,6 @@ struct Cell {
     std::uint64_t checksum = 0;
     double extra = 0;   // misses, reads or resident fraction, depending on condition
 };
-
-
-template <typename Fn>
-double TimeOnce(Fn&& fn, std::uint64_t* checksum) {
-    auto t0 = Clock::now();
-    std::uint64_t sum = fn();
-    auto t1 = Clock::now();
-
-    *checksum = sum;
-    return std::chrono::duration<double>(t1 - t0).count();
-}
 
 }  // namespace
 

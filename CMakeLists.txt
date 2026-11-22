@@ -98,3 +98,6 @@ target_link_libraries(tree_shape PRIVATE index_engine)
 
 add_executable(bench_range_scan bench/bench_range_scan.cpp)
 target_link_libraries(bench_range_scan PRIVATE index_engine)
+
+add_executable(bench_lookup bench/bench_lookup.cpp)
+target_link_libraries(bench_lookup PRIVATE index_engine)

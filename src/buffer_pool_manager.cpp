@@ -2,13 +2,22 @@
 
 #include <cstring>
 
+#include "index_engine/lru_k_replacer.h"
+#include "index_engine/lru_replacer.h"
+
 namespace index_engine {
 
-BufferPoolManager::BufferPoolManager(std::size_t pool_size, DiskManager* disk_manager)
+BufferPoolManager::BufferPoolManager(std::size_t pool_size, DiskManager* disk_manager,
+                                     ReplacementPolicy policy)
     : disk_manager_(disk_manager),
       memory_(pool_size * kPageSize),
-      pages_(pool_size),
-      replacer_(pool_size) {
+      pages_(pool_size) {
+
+    if (policy == ReplacementPolicy::kLRU2) {
+        replacer_ = std::make_unique<LRUKReplacer>(pool_size, 2);
+    } else {
+        replacer_ = std::make_unique<LRUReplacer>(pool_size);
+    }
 
     if (pool_size == 0) {
         throw std::invalid_argument("pool size must be > 0");
@@ -48,7 +57,7 @@ frame_id_t BufferPoolManager::GetFreeFrame() {
     }
 
     // 2) Otherwise evict the least recently used UNPINNED frame.
-    std::optional<frame_id_t> victim = replacer_.Victim();
+    std::optional<frame_id_t> victim = replacer_->Victim();
 
     if (!victim) {
         throw BufferPoolFullError("buffer pool full: all frames are pinned");
@@ -81,7 +90,8 @@ Page* BufferPoolManager::FetchPage(page_id_t page_id) {
 
         Page& page = pages_[found->second];
         ++page.pin_count_;
-        replacer_.Pin(found->second);
+        replacer_->RecordAccess(found->second);
+        replacer_->Pin(found->second);
 
         return &page;
     }
@@ -104,6 +114,7 @@ Page* BufferPoolManager::FetchPage(page_id_t page_id) {
     page.is_dirty_ = false;
 
     page_table_[page_id] = f;
+    replacer_->RecordAccess(f);
 
     return &page;
 }
@@ -124,6 +135,7 @@ Page* BufferPoolManager::NewPage(page_id_t* page_id) {
     page.is_dirty_ = true;  // must reach disk even if the caller never writes
 
     page_table_[*page_id] = f;
+    replacer_->RecordAccess(f);
 
     return &page;
 }
@@ -149,7 +161,7 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
     --page.pin_count_;
 
     if (page.pin_count_ == 0) {
-        replacer_.Unpin(found->second);  // now an eviction candidate
+        replacer_->Unpin(found->second);  // now an eviction candidate
     }
 
     return true;
@@ -198,7 +210,7 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
         return false;  // still in use
     }
 
-    replacer_.Pin(f);  // remove from eviction candidates
+    replacer_->Forget(f);  // remove from candidates and drop its history
     page_table_.erase(found);
 
     page.page_id_ = kInvalidPageId;

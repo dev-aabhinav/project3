@@ -35,6 +35,7 @@ endif()
 add_library(index_engine
     src/disk_manager.cpp
     src/lru_replacer.cpp
+    src/lru_k_replacer.cpp
     src/buffer_pool_manager.cpp
     src/b_plus_tree.cpp
     src/extendible_hash_table.cpp
@@ -71,6 +72,7 @@ add_executable(unit_tests
     tests/disk_manager_test.cpp
     tests/lru_cache_test.cpp
     tests/lru_replacer_test.cpp
+    tests/lru_k_replacer_test.cpp
     tests/buffer_pool_manager_test.cpp
     tests/page_guard_test.cpp
     tests/b_plus_tree_search_test.cpp
@@ -109,3 +111,6 @@ add_executable(map_node_gaps bench/map_node_gaps.cpp)
 
 add_executable(hash_growth bench/hash_growth.cpp)
 target_link_libraries(hash_growth PRIVATE index_engine)
+
+add_executable(bench_flooding bench/bench_flooding.cpp)
+target_link_libraries(bench_flooding PRIVATE index_engine)

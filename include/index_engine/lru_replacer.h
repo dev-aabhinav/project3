@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "index_engine/config.h"
+#include "index_engine/replacer.h"
 
 namespace index_engine {
 
@@ -19,26 +20,26 @@ namespace index_engine {
 // not pointers, so there is no heap allocation after construction.
 //
 //   head_ = most recently unpinned   ...   tail_ = least recent (victim)
-class LRUReplacer {
+class LRUReplacer : public Replacer {
 public:
     explicit LRUReplacer(std::size_t num_frames);
 
 
     // Frame became evictable (its pin count dropped to 0).
     // Added as most recent. No-op if it is already in the replacer.
-    void Unpin(frame_id_t frame_id);
+    void Unpin(frame_id_t frame_id) override;
 
     // Frame is in use again: remove it from the candidates.
     // No-op if it is not in the replacer.
-    void Pin(frame_id_t frame_id);
+    void Pin(frame_id_t frame_id) override;
 
     // Removes and returns the least recently unpinned frame,
     // or std::nullopt if every frame is pinned.
-    std::optional<frame_id_t> Victim();
+    std::optional<frame_id_t> Victim() override;
 
 
     // Number of evictable frames right now.
-    std::size_t Size() const { return size_; }
+    std::size_t Size() const override { return size_; }
 
 private:
     void CheckFrameId(frame_id_t frame_id) const;

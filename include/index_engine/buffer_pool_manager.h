@@ -2,13 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
 #include "index_engine/config.h"
 #include "index_engine/disk_manager.h"
-#include "index_engine/lru_replacer.h"
+#include "index_engine/replacer.h"
 #include "index_engine/page.h"
 
 namespace index_engine {
@@ -22,17 +23,25 @@ public:
 };
 
 
+// Which replacement policy the pool uses (see replacer.h).
+enum class ReplacementPolicy {
+    kLRU,    // classic LRU, ordered by unpin time
+    kLRU2,   // LRU-K with K = 2: resists sequential flooding
+};
+
+
 // Caches disk pages in a fixed number of in-memory frames.
 //
 //   page_table_ : page id -> frame id, for pages currently in memory
 //   free_list_  : frames never used yet (always used before evicting)
-//   replacer_   : unpinned frames in LRU order (eviction candidates)
+//   replacer_   : unpinned frames, ordered by the chosen policy (eviction candidates)
 //
 // Every FetchPage / NewPage must be matched by exactly one UnpinPage.
 // Not thread-safe.
 class BufferPoolManager {
 public:
-    BufferPoolManager(std::size_t pool_size, DiskManager* disk_manager);
+    BufferPoolManager(std::size_t pool_size, DiskManager* disk_manager,
+                      ReplacementPolicy policy = ReplacementPolicy::kLRU);
 
     // Writes back all dirty pages.
     ~BufferPoolManager();
@@ -83,7 +92,7 @@ private:
 
     std::unordered_map<page_id_t, frame_id_t> page_table_;
     std::vector<frame_id_t> free_list_;
-    LRUReplacer replacer_;
+    std::unique_ptr<Replacer> replacer_;
 
     std::uint64_t hits_ = 0;
     std::uint64_t misses_ = 0;

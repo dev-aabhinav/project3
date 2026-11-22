@@ -30,15 +30,28 @@ ascending build median |gap|        64 B, 90th pct         64 B, gap == +64 B: 1
 sizeof node payload: 16 B (pair) + 32 B rb-tree header; malloc rounds the node to 64 B
 ```
 
-## Software counter only (VM has no PMU): ./bench/perf_cache_misses.sh, REPEAT=1
+## Software counter only (VM has no PMU): ./bench/perf_cache_misses.sh (REPEAT=3, R_HI=20), two runs
 
-task-clock per key (hardware columns n/a in this VM):
+task-clock per key; hardware columns are n/a in this VM. (A first attempt with R=5 and REPEAT=1
+gave map_asc scan = 0.74 ns/key: setup noise between the two separate processes swamped 5 fast
+scans. Fixed by R_HI=20 + REPEAT=3; values below agree with bench_range_scan.)
 
-|  map_random  |  scan  |  132.48 ns  |
-|  map_random  |  range1000  |  137.25 ns  |
-|  map_asc  |  scan  |  0.74 ns  |
-|  map_asc  |  range1000  |  6.45 ns  |
-|  btree  |  scan  |  3.16 ns  |
-|  btree  |  range1000  |  3.14 ns  |
+```
+--- run 1 (REPEAT=3, R_HI=20)
+|  map_random  |  scan  |  144.98 ns  |
+|  map_random  |  range1000  |  142.93 ns  |
+|  map_asc  |  scan  |  9.04 ns  |
+|  map_asc  |  range1000  |  6.15 ns  |
+|  btree  |  scan  |  4.26 ns  |
+|  btree  |  range1000  |  4.21 ns  |
+--- run 2 (REPEAT=3, R_HI=20)
+|  map_random  |  scan  |  153.00 ns  |
+|  map_random  |  range1000  |  141.00 ns  |
+|  map_asc  |  scan  |  8.44 ns  |
+|  map_asc  |  range1000  |  6.25 ns  |
+|  btree  |  scan  |  4.14 ns  |
+|  btree  |  range1000  |  4.16 ns  |
+```
 
-Real hardware counters: NOT MEASURED yet (needs a native Linux machine).
+Real hardware counters (cache-misses, LLC-load-misses, dTLB-load-misses): NOT MEASURED yet
+(needs a native Linux machine; see bench/README.md).

@@ -101,3 +101,8 @@ target_link_libraries(bench_range_scan PRIVATE index_engine)
 
 add_executable(bench_lookup bench/bench_lookup.cpp)
 target_link_libraries(bench_lookup PRIVATE index_engine)
+
+add_executable(cache_probe bench/cache_probe.cpp)
+target_link_libraries(cache_probe PRIVATE index_engine)
+
+add_executable(map_node_gaps bench/map_node_gaps.cpp)

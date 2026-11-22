@@ -106,3 +106,6 @@ add_executable(cache_probe bench/cache_probe.cpp)
 target_link_libraries(cache_probe PRIVATE index_engine)
 
 add_executable(map_node_gaps bench/map_node_gaps.cpp)
+
+add_executable(hash_growth bench/hash_growth.cpp)
+target_link_libraries(hash_growth PRIVATE index_engine)
